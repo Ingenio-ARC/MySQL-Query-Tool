@@ -18,7 +18,7 @@ session_start();
 
 // Session key and expiry settings (seconds)
 $sessionKey = 'db_credentials';
-$sessionExpirySeconds = 60 * 60; // 60 minutes
+$sessionExpirySeconds = 60 * 60 * 8; // 8 hours
 
 // Helper to check credentials in session and expiry
 function credentials_valid()
@@ -425,7 +425,8 @@ if (credentials_valid()) {
         <form method="post">
             <input type="hidden" name="action" value="run">
             <input type="hidden" name="selected_db" value="<?php echo htmlspecialchars($selectedDb); ?>">
-            <textarea name="sql"><?php echo htmlspecialchars($currentSql); ?></textarea>
+            <div id="editor" style="width:100%;height:220px;border:1px solid #ddd"></div>
+            <textarea name="sql" style="display:none"><?php echo htmlspecialchars($currentSql); ?></textarea>
             <div style="margin-top:8px">
                 <button type="submit" name="action" value="run">Run SQL</button>
                 <button type="button" onclick="document.getElementById('saveBox').style.display='block'">Save Query</button>
@@ -444,7 +445,7 @@ if (credentials_valid()) {
                 <input type="hidden" name="selected_db" value="<?php echo htmlspecialchars($selectedDb); ?>">
                 <input type="text" name="name" placeholder="Save name" required>
                 <input type="hidden" name="sql" id="saveSql">
-                <button type="submit" onclick="document.getElementById('saveSql').value=document.querySelector('textarea[name=sql]').value">Save</button>
+                <button type="submit" onclick="document.getElementById('saveSql').value=(window.getEditorSQL?window.getEditorSQL():document.querySelector('textarea[name=sql]').value)">Save</button>
                 <button type="button" onclick="document.getElementById('saveBox').style.display='none'">Cancel</button>
             </form>
         </div>
@@ -485,6 +486,39 @@ if (credentials_valid()) {
         <?php endif; ?>
 
     </div>
+    
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.32.6/ace.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.32.6/ext-language_tools.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.32.6/mode-sql.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.32.6/theme-textmate.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+    <script>
+        (function () {
+            var textarea = document.querySelector('textarea[name=sql]');
+            var editorDiv = document.getElementById('editor');
+            if (!textarea || !editorDiv || !window.ace) return;
+            var editor = ace.edit(editorDiv);
+            window.sqlEditor = editor;
+            editor.setTheme('ace/theme/textmate');
+            editor.session.setMode('ace/mode/sql');
+            editor.setOptions({
+                enableBasicAutocompletion: true,
+                enableLiveAutocompletion: true,
+                fontSize: '13px',
+                tabSize: 2,
+                useSoftTabs: true
+            });
+            editor.session.setValue(textarea.value || '');
+            // Keep textarea synced on form submit
+            var runForm = textarea.closest('form');
+            if (runForm) {
+                runForm.addEventListener('submit', function () {
+                    textarea.value = editor.getValue();
+                });
+            }
+            // Helper for other actions (e.g., Save Query)
+            window.getEditorSQL = function () { return editor.getValue(); };
+        })();
+    </script>
 </body>
 
 </html>
