@@ -503,7 +503,8 @@ if (credentials_valid() && $selectedDb !== '' && ($view === 'table')) {
 <body class="<?php echo $isDark ? 'dark' : ''; ?>">
     <canvas id="starfield"></canvas>
     <div class="container">
-        <div class="sidebar">
+        <div class="sidebar">            
+            <h1>MySQL Query Tool</h1>
             <div style="margin-bottom:8px"><a href="?view=sql&selected_db=<?php echo urlencode($selectedDb); ?>" id="sql_command_link">SQL Command</a></div>
             <?php if (credentials_valid()): ?>
                 <details open>
@@ -562,7 +563,6 @@ if (credentials_valid() && $selectedDb !== '' && ($view === 'table')) {
             <?php endif; ?>
         </div>
         <div class="main">
-            <h1>MySQL Query Tool</h1>
             <?php if (credentials_valid()):
                 $c = $_SESSION[$sessionKey];
             ?>
