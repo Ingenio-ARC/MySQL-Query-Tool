@@ -37,16 +37,14 @@ if (isset($_POST['action']) && $_POST['action'] === 'login') {
     $user = trim($_POST['user'] ?? '');
     $pass = $_POST['pass'] ?? '';
     $database = trim($_POST['database'] ?? '');
-    $label = trim($_POST['cred_label'] ?? '');
-    if ($host === '' || $user === '' || $label === '') {
-        $loginError = 'Please provide host, user and a label for these credentials.';
+    if ($host === '' || $user === '') {
+        $loginError = 'Please provide host and user.';
     } else {
         $_SESSION[$sessionKey] = [
             'host' => $host,
             'user' => $user,
             'pass' => $pass,
             'database' => $database,
-            'label' => $label,
             'created' => time()
         ];
         // Redirect to avoid reposts
@@ -66,8 +64,9 @@ if (!file_exists($savedFile)) {
     file_put_contents($savedFile, json_encode([]));
 }
 
+// Only allow loading saved queries when authenticated
 // Robust: if a GET load is requested, read the saved file directly and populate the editor
-if (isset($_GET['load'])) {
+if (credentials_valid() && isset($_GET['load'])) {
     $loadId = $_GET['load'];
     $raw = @file_get_contents($savedFile);
     $all = json_decode($raw, true) ?: [];
@@ -92,7 +91,7 @@ function save_saved_queries($file, $data)
     file_put_contents($file, json_encode($data, JSON_PRETTY_PRINT));
 }
 
-$savedQueries = load_saved_queries($savedFile);
+$savedQueries = credentials_valid() ? load_saved_queries($savedFile) : [];
 
 $messages = [];
 $results = null;
@@ -100,6 +99,10 @@ $error = null;
 $databases = [];
 $selectedDb = '';
 $sep = $_POST['sep'] ?? $_GET['sep'] ?? ',';
+$tables = [];
+$tableView = null; // holds data when viewing a table
+$view = $_GET['view'] ?? '';
+$view = in_array($view, ['table', 'sql']) ? $view : 'sql';
 
 // (GET load now handled more robustly earlier)
 
@@ -113,7 +116,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if (!credentials_valid()) {
             $error = 'Database credentials are missing or expired. Please log in.';
         }
-        if ($action === 'save') {
+        if ($action === 'save' && credentials_valid()) {
             if ($name === '') {
                 $messages[] = "Please provide a name to save the query.";
             } else {
@@ -130,7 +133,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
         }
 
-        if ($action === 'run') {
+        if ($action === 'run' && credentials_valid()) {
             // Run query
             try {
                 // pull credentials from session
@@ -148,12 +151,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if ($ok) {
                     $results = [];
                     do {
+                        $qStart = microtime(true);
                         if ($res = $mysqli->store_result()) {
                             $rows = $res->fetch_all(MYSQLI_ASSOC);
-                            $results[] = ['type' => 'result', 'rows' => $rows];
+                            $elapsed = (microtime(true) - $qStart) * 1000.0;
+                            $results[] = ['type' => 'result', 'rows' => $rows, 'time_ms' => $elapsed, 'row_count' => count($rows)];
                             $res->free();
                         } else {
-                            $results[] = ['type' => 'info', 'info' => $mysqli->affected_rows];
+                            $elapsed = (microtime(true) - $qStart) * 1000.0;
+                            $results[] = ['type' => 'info', 'info' => $mysqli->affected_rows, 'time_ms' => $elapsed];
                         }
                     } while ($mysqli->more_results() && $mysqli->next_result());
                 } else {
@@ -164,7 +170,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $error = $e->getMessage();
             }
         }
-        if ($action === 'export') {
+        if ($action === 'export' && credentials_valid()) {
             // Export results as CSV by re-running the SQL and streaming CSV
             $sep = ($_POST['sep'] ?? ',') === ';' ? ';' : ',';
             try {
@@ -215,7 +221,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     } else {
                         // no result set (e.g. update) - output a small CSV with info
                         fputcsv($out, ['info'], $sep, '"');
-                        fputcsv($out, [ (string)$mysqli->affected_rows ], $sep, '"');
+                        fputcsv($out, [(string)$mysqli->affected_rows], $sep, '"');
                     }
                     fclose($out);
                     $mysqli->close();
@@ -228,21 +234,40 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
         }
     } elseif ($action === 'delete') {
-        $id = $_POST['id'] ?? '';
-        if ($id && isset($savedQueries[$id])) {
-            $name = $savedQueries[$id]['name'];
-            unset($savedQueries[$id]);
-            save_saved_queries($savedFile, $savedQueries);
-            $messages[] = "Deleted query '{$name}'.";
+        if (!credentials_valid()) {
+            $error = 'Please log in to delete saved queries.';
+        } else {
+            $id = $_POST['id'] ?? '';
+            if ($id && isset($savedQueries[$id])) {
+                $name = $savedQueries[$id]['name'];
+                unset($savedQueries[$id]);
+                save_saved_queries($savedFile, $savedQueries);
+                $messages[] = "Deleted query '{$name}'.";
+            }
         }
     } elseif ($action === 'load') {
-        $id = $_POST['id'] ?? '';
-        if ($id && isset($savedQueries[$id])) {
-            $loadedSql = $savedQueries[$id]['sql'];
-            // set POST sql for UI
-            $_POST['sql'] = $loadedSql;
-            $messages[] = "Loaded query '{$savedQueries[$id]['name']}'.";
+        if (!credentials_valid()) {
+            $error = 'Please log in to load saved queries.';
+        } else {
+            $id = $_POST['id'] ?? '';
+            if ($id && isset($savedQueries[$id])) {
+                $loadedSql = $savedQueries[$id]['sql'];
+                // set POST sql for UI
+                $_POST['sql'] = $loadedSql;
+                $messages[] = "Loaded query '{$savedQueries[$id]['name']}'.";
+            }
         }
+    } elseif ($action === 'set_db') {
+        // AJAX endpoint: set selected database in session without reloading
+        header('Content-Type: application/json');
+        if (!credentials_valid()) {
+            echo json_encode(['ok' => false, 'error' => 'not_authenticated']);
+            exit;
+        }
+        $sel = $_POST['selected_db'] ?? '';
+        $_SESSION[$sessionKey]['database'] = $sel;
+        echo json_encode(['ok' => true, 'selected_db' => $sel]);
+        exit;
     }
 }
 
@@ -281,6 +306,69 @@ if (credentials_valid()) {
     if ($selectedDb !== '') {
         $_SESSION[$sessionKey]['database'] = $selectedDb;
     }
+    // Load table list when a database is selected
+    if ($selectedDb !== '') {
+        try {
+            $mysqli2 = new mysqli($dbHost, $dbUser, $dbPass, $selectedDb);
+            if ($mysqli2->connect_errno) {
+                throw new Exception('Connect error: ' . $mysqli2->connect_error);
+            }
+            $res2 = $mysqli2->query('SHOW TABLES');
+            if ($res2) {
+                while ($row = $res2->fetch_array(MYSQLI_NUM)) {
+                    $tables[] = $row[0];
+                }
+                $res2->free();
+            }
+            $mysqli2->close();
+        } catch (Exception $e) {
+            $messages[] = 'Could not list tables: ' . $e->getMessage();
+        }
+    }
+}
+
+// Handle Table View with pagination
+if (credentials_valid() && $selectedDb !== '' && ($view === 'table')) {
+    $tableName = $_GET['table'] ?? '';
+    $page = max(1, intval($_GET['page'] ?? 1));
+    $perPage = 100;
+    if ($tableName !== '' && in_array($tableName, $tables, true)) {
+        try {
+            $c = $_SESSION[$sessionKey];
+            $mysqli = new mysqli($c['host'], $c['user'], $c['pass'], $selectedDb);
+            if ($mysqli->connect_errno) throw new Exception('Connect error: ' . $mysqli->connect_error);
+            $count = 0;
+            $resCnt = $mysqli->query('SELECT COUNT(*) AS cnt FROM `' . $mysqli->real_escape_string($tableName) . '`');
+            if ($resCnt) {
+                $row = $resCnt->fetch_assoc();
+                $count = intval($row['cnt'] ?? 0);
+                $resCnt->free();
+            }
+            $offset = ($page - 1) * $perPage;
+            $rows = [];
+            $cols = [];
+            $res = $mysqli->query('SELECT * FROM `' . $mysqli->real_escape_string($tableName) . '` LIMIT ' . intval($perPage) . ' OFFSET ' . intval($offset));
+            if ($res) {
+                $fields = $res->fetch_fields();
+                foreach ($fields as $f) $cols[] = $f->name;
+                while ($r = $res->fetch_assoc()) $rows[] = $r;
+                $res->free();
+            }
+            $mysqli->close();
+            $tableView = [
+                'name' => $tableName,
+                'page' => $page,
+                'perPage' => $perPage,
+                'total' => $count,
+                'cols' => $cols,
+                'rows' => $rows
+            ];
+        } catch (Exception $e) {
+            $error = 'Table view error: ' . $e->getMessage();
+        }
+    } else if ($tableName !== '') {
+        $error = 'Unknown table selected.';
+    }
 }
 
 ?>
@@ -292,24 +380,48 @@ if (credentials_valid()) {
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <title>MySQL Query Tool</title>
     <style>
+        :root {
+            --bg: #ffffff;
+            --fg: #111111;
+            --border: #dddddd;
+            --panel-bg: #ffffff;
+            --msg-bg: #e9f1ff;
+            --err-bg: #ffe9e9;
+            --link: #0645ad;
+        }
+
+        body.dark {
+            --bg: #0e1117;
+            --fg: #e6edf3;
+            --border: #2d333b;
+            --panel-bg: #0e1117;
+            --msg-bg: #13233a;
+            --err-bg: #3a1b1b;
+            --link: #58a6ff;
+        }
+
         body {
             font-family: system-ui, Segoe UI, Roboto, Arial;
-            margin: 20px
+            margin: 20px;
+            background: var(--bg);
+            color: var(--fg);
         }
 
         .container {
-            max-width: 1200px;
             margin: 0 auto;
             display: flex;
             gap: 16px;
+            position: relative;
+            z-index: 1;
         }
 
         .sidebar {
             width: 220px;
-            border: 1px solid #ddd;
+            border: 1px solid var(--border);
             padding: 8px;
             height: calc(100vh - 80px);
             overflow: auto;
+            background: var(--panel-bg);
         }
 
         .main {
@@ -319,186 +431,299 @@ if (credentials_valid()) {
         textarea {
             width: 100%;
             height: 200px;
-            font-family: monospace
+            font-family: monospace;
         }
 
         table {
             border-collapse: collapse;
             width: 100%;
-            margin-top: 10px
+            margin-top: 10px;
         }
 
         td,
         th {
-            border: 1px solid #ddd;
-            padding: 6px
+            border: 1px solid var(--border);
+            padding: 2px;
+            font-size: 11px;
         }
 
         .saved-list {
-            margin-top: 10px
+            margin-top: 10px;
         }
 
         .message {
             padding: 8px;
-            background: #eef;
-            margin: 6px 0
+            background: var(--msg-bg);
+            margin: 6px 0;
         }
 
         .error {
             padding: 8px;
-            background: #fee;
-            color: #900;
-            margin: 6px 0
+            background: var(--err-bg);
+            color: #ffb4b4;
+            margin: 6px 0;
+        }
+
+        a {
+            color: var(--link);
+        }
+
+        #starfield {
+            position: fixed;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 0;
+            display: none;
+            pointer-events: none;
+        }
+
+        body.dark #starfield {
+            display: block;
+        }
+
+        .theme-toggle {
+            position: fixed;
+            right: 16px;
+            bottom: 16px;
+            z-index: 2;
+            padding: 6px 10px;
+            font-size: 12px;
+            border-radius: 6px;
+            background: var(--panel-bg);
+            color: var(--fg);
+            border: 1px solid var(--border);
+            cursor: pointer;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
         }
     </style>
 </head>
+<?php $isDark = (($_COOKIE['theme'] ?? '') === 'dark'); ?>
 
-<body>
-        <div class="container">
+<body class="<?php echo $isDark ? 'dark' : ''; ?>">
+    <canvas id="starfield"></canvas>
+    <div class="container">
         <div class="sidebar">
-            <h3>Saved Queries</h3>
-            <div class="saved-list">
-                <?php if (empty($savedQueries)): ?>
-                    <div>No saved queries yet.</div>
-                <?php else: ?>
-                    <ul style="list-style:none;padding:0;margin:0">
-                        <?php foreach ($savedQueries as $s): ?>
-                            <li style="margin:6px 0;display:flex;align-items:center;justify-content:space-between">
-                                <a style="flex:1" href="?load=<?php echo urlencode($s['id']); ?>&selected_db=<?php echo urlencode($selectedDb); ?>"><?php echo htmlspecialchars($s['name']); ?></a>
-                                <form method="post" onsubmit="return confirm('Delete query <?php echo addslashes(htmlspecialchars($s['name'])); ?>?')" style="margin:0 0 0 8px">
-                                    <input type="hidden" name="action" value="delete">
-                                    <input type="hidden" name="selected_db" value="<?php echo htmlspecialchars($selectedDb); ?>">
-                                    <input type="hidden" name="id" value="<?php echo htmlspecialchars($s['id']); ?>">
-                                    <button type="submit" style="background:transparent;border:none;color:#900;cursor:pointer">✖</button>
-                                </form>
-                            </li>
-                        <?php endforeach; ?>
-                    </ul>
-                <?php endif; ?>
-            </div>
+            <div style="margin-bottom:8px"><a href="?view=sql&selected_db=<?php echo urlencode($selectedDb); ?>" id="sql_command_link">SQL Command</a></div>
+            <?php if (credentials_valid()): ?>
+                <details open>
+                    <summary style="cursor:pointer;font-weight:600">Saved Queries</summary>
+                    <div class="saved-list">
+                        <?php if (empty($savedQueries)): ?>
+                            <div>No saved queries yet.</div>
+                        <?php else: ?>
+                            <ul style="list-style:none;padding:0;margin:6px 0 0 0">
+                                <?php foreach ($savedQueries as $s): ?>
+                                    <li style="margin:6px 0;display:flex;align-items:center;justify-content:space-between">
+                                        <a style="flex:1" href="?load=<?php echo urlencode($s['id']); ?>&selected_db=<?php echo urlencode($selectedDb); ?>"><?php echo htmlspecialchars($s['name']); ?></a>
+                                        <form method="post" onsubmit="return confirm('Delete query <?php echo addslashes(htmlspecialchars($s['name'])); ?>?')" style="margin:0 0 0 8px">
+                                            <input type="hidden" name="action" value="delete">
+                                            <input type="hidden" name="selected_db" value="<?php echo htmlspecialchars($selectedDb); ?>">
+                                            <input type="hidden" name="id" value="<?php echo htmlspecialchars($s['id']); ?>">
+                                            <button type="submit" style="background:transparent;border:none;color:#900;cursor:pointer">✖</button>
+                                        </form>
+                                    </li>
+                                <?php endforeach; ?>
+                            </ul>
+                        <?php endif; ?>
+                    </div>
+                </details>
+                <details open style="margin-top:10px">
+                    <summary style="cursor:pointer;font-weight:600">Tables</summary>
+                    <div class="saved-list">
+                        <?php if (empty($selectedDb)): ?>
+                            <div>Select a database to view tables.</div>
+                        <?php elseif (empty($tables)): ?>
+                            <div>No tables found.</div>
+                        <?php else: ?>
+                            <ul style="list-style:none;padding:0;margin:6px 0 0 0">
+                                <?php foreach ($tables as $t): ?>
+                                    <li style="margin:6px 0">
+                                        <a href="?view=table&table=<?php echo urlencode($t); ?>&page=1&selected_db=<?php echo urlencode($selectedDb); ?>"><?php echo htmlspecialchars($t); ?></a>
+                                    </li>
+                                <?php endforeach; ?>
+                            </ul>
+                        <?php endif; ?>
+                    </div>
+                </details>
+            <?php else: ?>
+                <details open>
+                    <summary style="cursor:pointer;font-weight:600">Saved Queries</summary>
+                    <div class="saved-list">
+                        <div>Please log in to view saved queries.</div>
+                    </div>
+                </details>
+                <details open style="margin-top:10px">
+                    <summary style="cursor:pointer;font-weight:600">Tables</summary>
+                    <div class="saved-list">
+                        <div>Please log in to view tables.</div>
+                    </div>
+                </details>
+            <?php endif; ?>
         </div>
-
         <div class="main">
-        <h1>MySQL Query Tool</h1>
-        <?php if (credentials_valid()):
-            $c = $_SESSION[$sessionKey];
-        ?>
-            <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
-                <p style="margin:0">Logged in as <strong><?php echo htmlspecialchars($c['user']); ?></strong> @ <strong><?php echo htmlspecialchars($c['host']); ?></strong>
-                (label: <?php echo htmlspecialchars($c['label']); ?>).</p>
-                <form method="post" style="display:inline"><input type="hidden" name="action" value="logout"><button type="submit">Logout</button></form>
-                <?php if (!empty($databases)): ?>
-                    <form method="get" style="margin:0">
-                        <label for="selected_db">Database:</label>
-                        <select id="selected_db" name="selected_db" onchange="this.form.submit()">
-                            <option value="">(none)</option>
-                            <?php foreach ($databases as $db): ?>
-                                <option value="<?php echo htmlspecialchars($db); ?>" <?php echo ($db === $selectedDb ? 'selected' : ''); ?>><?php echo htmlspecialchars($db); ?></option>
-                            <?php endforeach; ?>
-                        </select>
-                        <noscript><button type="submit">Select</button></noscript>
+            <h1>MySQL Query Tool</h1>
+            <?php if (credentials_valid()):
+                $c = $_SESSION[$sessionKey];
+            ?>
+                <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+                    <p style="margin:0">Logged in as <strong><?php echo htmlspecialchars($c['user']); ?></strong> @ <strong><?php echo htmlspecialchars($c['host']); ?></strong>.</p>
+                    <form method="post" style="display:inline"><input type="hidden" name="action" value="logout"><button type="submit">Logout</button></form>
+                    <?php if (!empty($databases)): ?>
+                        <div style="display:flex;align-items:center;gap:6px">
+                            <label for="selected_db">Database:</label>
+                            <select id="selected_db" name="selected_db">
+                                <option value="">(none)</option>
+                                <?php foreach ($databases as $db): ?>
+                                    <option value="<?php echo htmlspecialchars($db); ?>" <?php echo ($db === $selectedDb ? 'selected' : ''); ?>><?php echo htmlspecialchars($db); ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                            <span id="db_status" style="font-size:12px;color:#666"></span>
+                        </div>
+                    <?php endif; ?>
+                </div>
+            <?php else: ?>
+                <p>Please log in with your MySQL credentials (they are stored in the session for <?php echo intval($sessionExpirySeconds / 60); ?> minutes).</p>
+                <div style="border:1px solid #ddd;padding:10px;margin-bottom:10px">
+                    <?php if (!empty($loginError)): ?><div class="error"><?php echo htmlspecialchars($loginError); ?></div><?php endif; ?>
+                    <form method="post" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+                        <input type="hidden" name="action" value="login">
+                        <input name="host" placeholder="host (127.0.0.1)" required>
+                        <input name="user" placeholder="user" required>
+                        <input name="pass" placeholder="password" type="password">
+                        <input name="database" placeholder="default database (optional)">
+                        <button type="submit">Login and Store</button>
                     </form>
-                <?php endif; ?>
-            </div>
-        <?php else: ?>
-            <p>Please log in with your MySQL credentials (they are stored in the session for <?php echo intval($sessionExpirySeconds / 60); ?> minutes).</p>
-            <div style="border:1px solid #ddd;padding:10px;margin-bottom:10px">
-                <?php if (!empty($loginError)): ?><div class="error"><?php echo htmlspecialchars($loginError); ?></div><?php endif; ?>
-                <form method="post" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-                    <input type="hidden" name="action" value="login">
-                    <input name="host" placeholder="host (127.0.0.1)" required>
-                    <input name="user" placeholder="user" required>
-                    <input name="pass" placeholder="password" type="password">
-                    <input name="database" placeholder="default database (optional)">
-                    <input name="cred_label" placeholder="label for these creds (e.g. 'dev-db')" required>
-                    <button type="submit">Login and Store</button>
-                </form>
-            </div>
-        <?php endif; ?>
-        <?php foreach ($messages as $m): ?>
-            <div class="message"><?php echo htmlspecialchars($m); ?></div>
-        <?php endforeach; ?>
-        <?php if ($error): ?>
-            <div class="error"><?php echo htmlspecialchars($error); ?></div>
-        <?php endif; ?>
+                </div>
+            <?php endif; ?>
+            <?php foreach ($messages as $m): ?>
+                <div class="message"><?php echo htmlspecialchars($m); ?></div>
+            <?php endforeach; ?>
+            <?php if ($error): ?>
+                <div class="error"><?php echo htmlspecialchars($error); ?></div>
+            <?php endif; ?>
 
-        <form method="post">
-            <input type="hidden" name="action" value="run">
-            <input type="hidden" name="selected_db" value="<?php echo htmlspecialchars($selectedDb); ?>">
-            <div id="editor" style="width:100%;height:220px;border:1px solid #ddd"></div>
-            <textarea name="sql" style="display:none"><?php echo htmlspecialchars($currentSql); ?></textarea>
-            <div style="margin-top:8px">
-                <button type="submit" name="action" value="run">Run SQL</button>
-                <button type="button" onclick="document.getElementById('saveBox').style.display='block'">Save Query</button>
-                <label for="sep" style="margin-left:8px">CSV sep:</label>
-                <select id="sep" name="sep">
-                    <option value=",">Comma (,)</option>
-                    <option value=";" <?php echo ($sep ?? ',') === ';' ? 'selected' : ''; ?>>Semicolon (;)</option>
-                </select>
-                <button type="submit" name="action" value="export">Export CSV</button>
-            </div>
-        </form>
-
-        <div id="saveBox" style="display:none;margin-top:8px">
-            <form method="post">
-                <input type="hidden" name="action" value="save">
-                <input type="hidden" name="selected_db" value="<?php echo htmlspecialchars($selectedDb); ?>">
-                <input type="text" name="name" placeholder="Save name" required>
-                <input type="hidden" name="sql" id="saveSql">
-                <button type="submit" onclick="document.getElementById('saveSql').value=(window.getEditorSQL?window.getEditorSQL():document.querySelector('textarea[name=sql]').value)">Save</button>
-                <button type="button" onclick="document.getElementById('saveBox').style.display='none'">Cancel</button>
-            </form>
-        </div>
-
-        <!-- saved queries moved to sidebar -->
-
-        <?php if ($results !== null): ?>
-            <h2>Results</h2>
-            <?php foreach ($results as $i => $set): ?>
-                <h3>Result Set <?php echo $i + 1; ?></h3>
-                <?php if ($set['type'] === 'result'): ?>
-                    <?php if (empty($set['rows'])): ?>
-                        <div>No rows returned.</div>
-                    <?php else: ?>
-                        <table>
-                            <thead>
+            <?php if ($view === 'table' && $tableView): ?>
+                <h2>Table: <?php echo htmlspecialchars($tableView['name']); ?></h2>
+                <?php
+                $totalPages = max(1, (int)ceil($tableView['total'] / $tableView['perPage']));
+                $currPage = $tableView['page'];
+                $base = '?view=table&table=' . urlencode($tableView['name']) . '&selected_db=' . urlencode($selectedDb) . '&page=';
+                ?>
+                <div style="margin-bottom:8px">
+                    <a href="<?php echo $base . max(1, $currPage - 1); ?>">Prev</a>
+                    <span style="margin:0 8px">Page <?php echo $currPage; ?> / <?php echo $totalPages; ?></span>
+                    <a href="<?php echo $base . min($totalPages, $currPage + 1); ?>">Next</a>
+                </div>
+                <?php if (empty($tableView['rows'])): ?>
+                    <div>No rows.</div>
+                <?php else: ?>
+                    <table>
+                        <thead>
+                            <tr>
+                                <?php foreach ($tableView['cols'] as $col): ?>
+                                    <th><?php echo htmlspecialchars($col); ?></th>
+                                <?php endforeach; ?>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php foreach ($tableView['rows'] as $row): ?>
                                 <tr>
-                                    <?php foreach (array_keys($set['rows'][0]) as $col): ?>
-                                        <th><?php echo htmlspecialchars($col); ?></th>
+                                    <?php foreach ($row as $v): ?>
+                                        <td><?php echo htmlspecialchars((string)$v); ?></td>
                                     <?php endforeach; ?>
                                 </tr>
-                            </thead>
-                            <tbody>
-                                <?php foreach ($set['rows'] as $row): ?>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                <?php endif; ?>
+                <div style="margin-top:8px">
+                    <a href="?view=table&table=<?php echo urlencode($tableView['name']); ?>&page=1&selected_db=<?php echo urlencode($selectedDb); ?>">First 100</a>
+                    <span style="margin-left:8px"><a href="?view=sql&selected_db=<?php echo urlencode($selectedDb); ?>">Back to SQL Command</a></span>
+                </div>
+            <?php else: ?>
+                <form method="post">
+                    <input type="hidden" name="action" value="run">
+                    <input type="hidden" name="selected_db" value="<?php echo htmlspecialchars($selectedDb); ?>">
+                    <div id="editor" style="width:100%;height:220px;border:1px solid #ddd"></div>
+                    <textarea name="sql" style="display:none"><?php echo htmlspecialchars($currentSql); ?></textarea>
+                    <div style="margin-top:8px">
+                        <button type="submit" name="action" value="run">Run SQL</button>
+                        <button type="button" onclick="document.getElementById('saveBox').style.display='block'">Save Query</button>
+                        <label for="sep" style="margin-left:8px">CSV sep:</label>
+                        <select id="sep" name="sep">
+                            <option value=",">Comma (,)</option>
+                            <option value=";" <?php echo ($sep ?? ',') === ';' ? 'selected' : ''; ?>>Semicolon (;)</option>
+                        </select>
+                        <button type="submit" name="action" value="export">Export CSV</button>
+                    </div>
+                </form>
+
+                <div id="saveBox" style="display:none;margin-top:8px">
+                    <form method="post">
+                        <input type="hidden" name="action" value="save">
+                        <input type="hidden" name="selected_db" value="<?php echo htmlspecialchars($selectedDb); ?>">
+                        <input type="text" name="name" placeholder="Save name" required>
+                        <input type="hidden" name="sql" id="saveSql">
+                        <button type="submit" onclick="document.getElementById('saveSql').value=(window.getEditorSQL?window.getEditorSQL():document.querySelector('textarea[name=sql]').value)">Save</button>
+                        <button type="button" onclick="document.getElementById('saveBox').style.display='none'">Cancel</button>
+                    </form>
+                </div>
+            <?php endif; ?>
+
+            <!-- saved queries moved to sidebar -->
+
+            <?php if ($results !== null): ?>
+                <h2>Results</h2>
+                <?php foreach ($results as $i => $set): ?>
+                    <?php if ($set['type'] === 'result'): ?>
+                        <h3><?php echo intval($set['row_count']); ?> rows in <?php echo number_format($set['time_ms'], 2); ?> ms</h3>
+                        <?php if (empty($set['rows'])): ?>
+                            <div>No rows returned.</div>
+                        <?php else: ?>
+                            <table>
+                                <thead>
                                     <tr>
-                                        <?php foreach ($row as $v): ?>
-                                            <td><?php echo htmlspecialchars((string)$v); ?></td>
+                                        <?php foreach (array_keys($set['rows'][0]) as $col): ?>
+                                            <th><?php echo htmlspecialchars($col); ?></th>
                                         <?php endforeach; ?>
                                     </tr>
-                                <?php endforeach; ?>
-                            </tbody>
-                        </table>
+                                </thead>
+                                <tbody>
+                                    <?php foreach ($set['rows'] as $row): ?>
+                                        <tr>
+                                            <?php foreach ($row as $v): ?>
+                                                <td><?php echo htmlspecialchars((string)$v); ?></td>
+                                            <?php endforeach; ?>
+                                        </tr>
+                                    <?php endforeach; ?>
+                                </tbody>
+                            </table>
+                        <?php endif; ?>
+                    <?php else: ?>
+                        <h3>Affected rows: <?php echo htmlspecialchars((string)$set['info']); ?> in <?php echo isset($set['time_ms']) ? number_format($set['time_ms'], 2) . ' ms' : ''; ?></h3>
                     <?php endif; ?>
-                <?php else: ?>
-                    <div>Affected rows: <?php echo htmlspecialchars((string)$set['info']); ?></div>
-                <?php endif; ?>
-            <?php endforeach; ?>
-        <?php endif; ?>
+                <?php endforeach; ?>
+            <?php endif; ?>
 
+        </div>
     </div>
-    
+    <button id="theme_toggle" class="theme-toggle">Dark Mode</button>
+
     <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.32.6/ace.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.32.6/ext-language_tools.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.32.6/mode-sql.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.32.6/theme-textmate.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.32.6/theme-monokai.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
     <script>
-        (function () {
+        (function() {
             var textarea = document.querySelector('textarea[name=sql]');
             var editorDiv = document.getElementById('editor');
             if (!textarea || !editorDiv || !window.ace) return;
             var editor = ace.edit(editorDiv);
             window.sqlEditor = editor;
-            editor.setTheme('ace/theme/textmate');
+            var aceTheme = document.body.classList.contains('dark') ? 'ace/theme/monokai' : 'ace/theme/textmate';
+            editor.setTheme(aceTheme);
             editor.session.setMode('ace/mode/sql');
             editor.setOptions({
                 enableBasicAutocompletion: true,
@@ -511,12 +736,181 @@ if (credentials_valid()) {
             // Keep textarea synced on form submit
             var runForm = textarea.closest('form');
             if (runForm) {
-                runForm.addEventListener('submit', function () {
+                runForm.addEventListener('submit', function() {
                     textarea.value = editor.getValue();
                 });
             }
             // Helper for other actions (e.g., Save Query)
-            window.getEditorSQL = function () { return editor.getValue(); };
+            window.getEditorSQL = function() {
+                return editor.getValue();
+            };
+        })();
+        (function() {
+            // Theme toggle + cookie persistence
+            function setCookie(name, value, maxAgeSeconds) {
+                document.cookie = name + '=' + encodeURIComponent(value) + '; path=/; max-age=' + maxAgeSeconds;
+            }
+
+            function getCookie(name) {
+                var m = document.cookie.match(new RegExp('(?:^|; )' + name.replace(/([.$?*|{}()\[\]\\\/\+^])/g, '\\$1') + '=([^;]*)'));
+                return m ? decodeURIComponent(m[1]) : null;
+            }
+            var btn = document.getElementById('theme_toggle');
+
+            function applyThemeClass(theme) {
+                var dark = theme === 'dark';
+                document.body.classList.toggle('dark', dark);
+                if (window.sqlEditor) {
+                    window.sqlEditor.setTheme(dark ? 'ace/theme/monokai' : 'ace/theme/textmate');
+                }
+                if (btn) btn.textContent = dark ? 'Light Mode' : 'Dark Mode';
+                if (dark) startStarfield();
+                else stopStarfield();
+            }
+            var initial = getCookie('theme') || (document.body.classList.contains('dark') ? 'dark' : 'light');
+            applyThemeClass(initial);
+            if (btn) {
+                btn.addEventListener('click', function() {
+                    var nowDark = !document.body.classList.contains('dark');
+                    var theme = nowDark ? 'dark' : 'light';
+                    setCookie('theme', theme, 60 * 60 * 24 * 365);
+                    applyThemeClass(theme);
+                });
+            }
+            // Subtle starfield animation for dark mode only
+            var canvas = document.getElementById('starfield');
+            var ctx = canvas ? canvas.getContext('2d') : null;
+            var animId = null;
+            var stars = [];
+
+            function resize() {
+                if (!canvas) return;
+                var dpr = window.devicePixelRatio || 1;
+                canvas.width = Math.floor(window.innerWidth * dpr);
+                canvas.height = Math.floor(window.innerHeight * dpr);
+                canvas.style.width = window.innerWidth + 'px';
+                canvas.style.height = window.innerHeight + 'px';
+                if (ctx) ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+            }
+
+            function initStars() {
+                stars = [];
+                var w = window.innerWidth,
+                    h = window.innerHeight;
+                var count = Math.min(160, Math.max(80, Math.floor((w * h) / 30000)));
+                for (var i = 0; i < count; i++) {
+                    stars.push({
+                        x: Math.random() * w,
+                        y: Math.random() * h,
+                        r: Math.random() * 1.3 + 0.3,
+                        a: 0.5 + Math.random() * 0.5,
+                        vx: (Math.random() - 0.5) * 0.06,
+                        vy: (Math.random() - 0.5) * 0.06
+                    });
+                }
+            }
+
+            function step() {
+                if (!ctx || !canvas) return;
+                var w = canvas.width / (window.devicePixelRatio || 1);
+                var h = canvas.height / (window.devicePixelRatio || 1);
+                ctx.clearRect(0, 0, w, h);
+                ctx.fillStyle = '#ffffff';
+                for (var i = 0; i < stars.length; i++) {
+                    var s = stars[i];
+                    s.x += s.vx;
+                    s.y += s.vy;
+                    if (s.x < -2) s.x = w + 2;
+                    else if (s.x > w + 2) s.x = -2;
+                    if (s.y < -2) s.y = h + 2;
+                    else if (s.y > h + 2) s.y = -2;
+                    ctx.globalAlpha = s.a;
+                    ctx.beginPath();
+                    ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+                ctx.globalAlpha = 1;
+                animId = window.requestAnimationFrame(step);
+            }
+
+            function startStarfield() {
+                if (!canvas || !ctx) return;
+                resize();
+                initStars();
+                if (animId) cancelAnimationFrame(animId);
+                animId = requestAnimationFrame(step);
+                window.addEventListener('resize', onResize);
+            }
+
+            function stopStarfield() {
+                if (animId) cancelAnimationFrame(animId);
+                animId = null;
+                if (ctx && canvas) ctx.clearRect(0, 0, canvas.width, canvas.height);
+                window.removeEventListener('resize', onResize);
+            }
+
+            function onResize() {
+                resize();
+                initStars();
+            }
+            if (document.body.classList.contains('dark')) startStarfield();
+        })();
+        (function() {
+            var sel = document.getElementById('selected_db');
+            var status = document.getElementById('db_status');
+            if (!sel) return;
+
+            function setStatus(msg, ok) {
+                if (!status) return;
+                status.textContent = msg || '';
+                status.style.color = ok ? '#2d7' : '#c33';
+                if (msg) setTimeout(function() {
+                    status.textContent = '';
+                }, 1500);
+            }
+            sel.addEventListener('change', function() {
+                var v = sel.value;
+                setStatus('Saving…', true);
+                fetch(window.location.href, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded'
+                    },
+                    body: 'action=' + encodeURIComponent('set_db') + '&selected_db=' + encodeURIComponent(v)
+                }).then(function(r) {
+                    return r.json();
+                }).then(function(j) {
+                    if (j && j.ok) {
+                        setStatus('Saved', true);
+                        // sync hidden inputs named selected_db
+                        document.querySelectorAll('input[name="selected_db"]').forEach(function(inp) {
+                            inp.value = v;
+                        });
+                        // update saved query links to include selected_db
+                        document.querySelectorAll('.sidebar a[href*="?load="]').forEach(function(a) {
+                            try {
+                                var url = new URL(a.href, window.location.origin);
+                                url.searchParams.set('selected_db', v);
+                                a.href = url.toString();
+                            } catch (_) {}
+                        });
+                        // update SQL Command link
+                        var sqlLink = document.getElementById('sql_command_link');
+                        if (sqlLink) {
+                            try {
+                                var url2 = new URL(sqlLink.href, window.location.origin);
+                                url2.searchParams.set('selected_db', v);
+                                url2.searchParams.set('view', 'sql');
+                                sqlLink.href = url2.toString();
+                            } catch (_) {}
+                        }
+                    } else {
+                        setStatus('Failed to save DB', false);
+                    }
+                }).catch(function() {
+                    setStatus('Network error', false);
+                });
+            });
         })();
     </script>
 </body>
