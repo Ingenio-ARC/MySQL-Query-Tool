@@ -17,6 +17,12 @@ php -S localhost:8000
 
 3. Open `http://localhost:8000/mysql_query_tool.php` in your browser.
 
+Visual flair (dark mode):
+- A lightweight starfield runs only in dark mode.
+- Most stars drift in the same direction to mimic a night sky.
+- A subset of subtly bluish stars move the opposite way; their count reflects the latest query's total row impact (rows returned for SELECTs, affected rows for INSERT/UPDATE/DELETE), capped to avoid excess.
+- The total number of stars is limited by a global cap to protect performance.
+
 Security notes:
 - This tool is intentionally small and not hardened. Do not expose it to untrusted networks.
 - Running arbitrary SQL can modify or delete data. Use caution.

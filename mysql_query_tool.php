@@ -96,6 +96,7 @@ $savedQueries = credentials_valid() ? load_saved_queries($savedFile) : [];
 $messages = [];
 $results = null;
 $error = null;
+$rowImpact = 0; // total rows returned or affected by the last executed SQL
 $databases = [];
 $selectedDb = '';
 $sep = $_POST['sep'] ?? $_GET['sep'] ?? ',';
@@ -156,10 +157,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             $rows = $res->fetch_all(MYSQLI_ASSOC);
                             $elapsed = (microtime(true) - $qStart) * 1000.0;
                             $results[] = ['type' => 'result', 'rows' => $rows, 'time_ms' => $elapsed, 'row_count' => count($rows)];
+                            $rowImpact += count($rows);
                             $res->free();
                         } else {
                             $elapsed = (microtime(true) - $qStart) * 1000.0;
                             $results[] = ['type' => 'info', 'info' => $mysqli->affected_rows, 'time_ms' => $elapsed];
+                            if ($mysqli->affected_rows > 0) $rowImpact += (int)$mysqli->affected_rows;
                         }
                     } while ($mysqli->more_results() && $mysqli->next_result());
                 } else {
@@ -417,6 +420,8 @@ if (credentials_valid() && $selectedDb !== '' && ($view === 'table')) {
 
         .sidebar {
             width: 220px;
+            min-width: 220px;
+            flex: 0 0 220px;
             border: 1px solid var(--border);
             padding: 8px;
             height: calc(100vh - 80px);
@@ -484,7 +489,7 @@ if (credentials_valid() && $selectedDb !== '' && ($view === 'table')) {
 
         .theme-toggle {
             position: fixed;
-            right: 16px;
+            left: 16px;
             bottom: 16px;
             z-index: 2;
             padding: 6px 10px;
@@ -716,6 +721,8 @@ if (credentials_valid() && $selectedDb !== '' && ($view === 'table')) {
     <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.32.6/theme-textmate.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.32.6/theme-monokai.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
     <script>
+                // Expose last query's total row impact (returned or affected) to the starfield
+                window.lastRowImpact = <?php echo (int)$rowImpact; ?>;
         (function() {
             var textarea = document.querySelector('textarea[name=sql]');
             var editorDiv = document.getElementById('editor');
@@ -782,6 +789,21 @@ if (credentials_valid() && $selectedDb !== '' && ($view === 'table')) {
             var ctx = canvas ? canvas.getContext('2d') : null;
             var animId = null;
             var stars = [];
+            var lastImpact = Math.max(0, parseInt(window.lastRowImpact || 0, 10) || 0);
+            // Starfield configuration for easy tweaking
+            var STARFIELD = {
+                maxStars: 500,          // global cap
+                maxAltFraction: 0.5,    // max fraction of stars going alternate direction
+                baseSpeed: 0.1,         // primary star nominal speed (px per frame)
+                speedJitter: 0.04,      // +/- jitter around base speed
+                altSpeed: 0.11,         // alternate stars speed
+                obliqueAngleDeg: 20,    // base oblique angle for primary drift (degrees). 0 = purely right
+                altOffsetDeg: 180,      // how much to rotate for alt direction
+                verticalJitter: 0.3,    // factor mixing in some orthogonal component
+                // slow rotation to simulate sky; radians per second
+                rotationSpeed: 0.01,    // gentler rotation
+                enableRotation: true
+            };
 
             function resize() {
                 if (!canvas) return;
@@ -797,15 +819,60 @@ if (credentials_valid() && $selectedDb !== '' && ($view === 'table')) {
                 stars = [];
                 var w = window.innerWidth,
                     h = window.innerHeight;
-                var count = Math.min(160, Math.max(80, Math.floor((w * h) / 30000)));
-                for (var i = 0; i < count; i++) {
+                // Base count scales with area but is capped globally
+                var areaCount = Math.max(100, Math.floor((w * h) / 22000));
+                var total = Math.min(STARFIELD.maxStars, Math.min(400, areaCount));
+                // Number of alt-direction stars based on last query rows, capped by fraction and total
+                var altCap = Math.floor(total * STARFIELD.maxAltFraction);
+                var altCount = Math.min(altCap, lastImpact);
+                var mainCount = Math.max(0, total - altCount);
+
+                // Precompute base angles in radians
+                var baseRad = STARFIELD.obliqueAngleDeg * Math.PI / 180;
+                var altRad = (STARFIELD.obliqueAngleDeg + STARFIELD.altOffsetDeg) * Math.PI / 180;
+                var sinBase = Math.sin(baseRad), cosBase = Math.cos(baseRad);
+                var sinAlt = Math.sin(altRad), cosAlt = Math.cos(altRad);
+
+                function makeVel(speed, sinA, cosA) {
+                    // Blend the base direction with a bit of orthogonal jitter for a more natural oblique path
+                    var jitter = (Math.random() - 0.5) * STARFIELD.verticalJitter;
+                    var jx = -sinA * jitter; // orthogonal component
+                    var jy = cosA * jitter;
+                    var vx = (cosA + jx);
+                    var vy = (sinA + jy);
+                    // normalize
+                    var mag = Math.hypot(vx, vy) || 1;
+                    vx = vx / mag * speed;
+                    vy = vy / mag * speed;
+                    return { vx: vx, vy: vy };
+                }
+
+                // Primary stars
+                for (var i = 0; i < mainCount; i++) {
+                    var speed = STARFIELD.baseSpeed + (Math.random() - 0.5) * STARFIELD.speedJitter;
+                    var v = makeVel(speed, sinBase, cosBase);
                     stars.push({
                         x: Math.random() * w,
                         y: Math.random() * h,
-                        r: Math.random() * 1.3 + 0.3,
+                        r: Math.random() * 1.4 + 0.3,
+                        a: 0.45 + Math.random() * 0.55,
+                        vx: v.vx,
+                        vy: v.vy,
+                        color: '#ffffff'
+                    });
+                }
+                // Alternate stars (deeper blue as requested)
+                for (var j = 0; j < altCount; j++) {
+                    var sp2 = STARFIELD.altSpeed + (Math.random() - 0.5) * (STARFIELD.speedJitter * 0.8);
+                    var v2 = makeVel(sp2, sinAlt, cosAlt);
+                    stars.push({
+                        x: Math.random() * w,
+                        y: Math.random() * h,
+                        r: Math.random() * 1.6 + 0.3,
                         a: 0.5 + Math.random() * 0.5,
-                        vx: (Math.random() - 0.5) * 0.06,
-                        vy: (Math.random() - 0.5) * 0.06
+                        vx: v2.vx,
+                        vy: v2.vy,
+                        color: 'rgb(81, 147, 255)'
                     });
                 }
             }
@@ -815,18 +882,48 @@ if (credentials_valid() && $selectedDb !== '' && ($view === 'table')) {
                 var w = canvas.width / (window.devicePixelRatio || 1);
                 var h = canvas.height / (window.devicePixelRatio || 1);
                 ctx.clearRect(0, 0, w, h);
-                ctx.fillStyle = '#ffffff';
-                for (var i = 0; i < stars.length; i++) {
-                    var s = stars[i];
-                    s.x += s.vx;
-                    s.y += s.vy;
-                    if (s.x < -2) s.x = w + 2;
-                    else if (s.x > w + 2) s.x = -2;
-                    if (s.y < -2) s.y = h + 2;
-                    else if (s.y > h + 2) s.y = -2;
-                    ctx.globalAlpha = s.a;
+
+                // First pass: draw rotating layer (primary white stars only)
+                if (STARFIELD.enableRotation && STARFIELD.rotationSpeed) {
+                    var now = performance.now() / 1000; // seconds
+                    var rot = now * STARFIELD.rotationSpeed;
+                    var cx = w / 2, cy = h / 2;
+                    ctx.save();
+                    ctx.translate(cx, cy);
+                    ctx.rotate(rot);
+                    ctx.translate(-cx, -cy);
+                    for (var i = 0; i < stars.length; i++) {
+                        var s = stars[i];
+                        if (s.color && s.color !== '#ffffff') continue; // rotate only primary/white stars
+                        s.x += s.vx;
+                        s.y += s.vy;
+                        if (s.x < -2) s.x = w + 2;
+                        else if (s.x > w + 2) s.x = -2;
+                        if (s.y < -2) s.y = h + 2;
+                        else if (s.y > h + 2) s.y = -2;
+                        ctx.globalAlpha = s.a;
+                        ctx.fillStyle = s.color || '#ffffff';
+                        ctx.beginPath();
+                        ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+                        ctx.fill();
+                    }
+                    ctx.restore();
+                }
+
+                // Second pass: draw non-rotating bluish stars
+                for (var j = 0; j < stars.length; j++) {
+                    var sb = stars[j];
+                    if (!sb.color || sb.color === '#ffffff') continue; // skip primary layer here
+                    sb.x += sb.vx;
+                    sb.y += sb.vy;
+                    if (sb.x < -2) sb.x = w + 2;
+                    else if (sb.x > w + 2) sb.x = -2;
+                    if (sb.y < -2) sb.y = h + 2;
+                    else if (sb.y > h + 2) sb.y = -2;
+                    ctx.globalAlpha = sb.a;
+                    ctx.fillStyle = sb.color;
                     ctx.beginPath();
-                    ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+                    ctx.arc(sb.x, sb.y, sb.r, 0, Math.PI * 2);
                     ctx.fill();
                 }
                 ctx.globalAlpha = 1;
