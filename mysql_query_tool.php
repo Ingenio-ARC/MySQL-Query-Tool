@@ -801,14 +801,14 @@ if (credentials_valid() && $selectedDb !== '' && ($view === 'table')) {
             var STARFIELD = {
                 maxStars: 500,          // global cap
                 maxAltFraction: 0.8,    // max fraction of stars going alternate direction
-                baseSpeed: 0.1,         // primary star nominal speed (px per frame)
+                baseSpeed: 0.05,         // primary star nominal speed (px per frame)
                 speedJitter: 0.04,      // +/- jitter around base speed
-                altSpeed: 0.13,         // alternate stars speed
+                altSpeed: 0.07,         // alternate stars speed
                 obliqueAngleDeg: 20,    // base oblique angle for primary drift (degrees). 0 = purely right
                 altOffsetDeg: 180,      // how much to rotate for alt direction
                 verticalJitter: 0.3,    // factor mixing in some orthogonal component
                 // slow rotation to simulate sky; radians per second
-                rotationSpeed: 0.01,    // gentler rotation
+                rotationSpeed: 0.005,    // gentler rotation
                 enableRotation: true
             };
 
