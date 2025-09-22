@@ -55,6 +55,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'login') {
 
 if (isset($_POST['action']) && $_POST['action'] === 'logout') {
     unset($_SESSION[$sessionKey]);
+    unset($_SESSION['last_row_impact']);
     header('Location: ' . $_SERVER['PHP_SELF']);
     exit;
 }
@@ -165,6 +166,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             if ($mysqli->affected_rows > 0) $rowImpact += (int)$mysqli->affected_rows;
                         }
                     } while ($mysqli->more_results() && $mysqli->next_result());
+                    // Remember total impact for subsequent page views (e.g., when navigating)
+                    $_SESSION['last_row_impact'] = (int)$rowImpact;
                 } else {
                     throw new Exception('Query error: ' . $mysqli->error);
                 }
@@ -366,6 +369,9 @@ if (credentials_valid() && $selectedDb !== '' && ($view === 'table')) {
                 'cols' => $cols,
                 'rows' => $rows
             ];
+            // Update row impact to reflect currently displayed rows in Table View
+            $rowImpact = count($rows);
+            $_SESSION['last_row_impact'] = (int)$rowImpact;
         } catch (Exception $e) {
             $error = 'Table view error: ' . $e->getMessage();
         }
@@ -721,8 +727,9 @@ if (credentials_valid() && $selectedDb !== '' && ($view === 'table')) {
     <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.32.6/theme-textmate.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.32.6/theme-monokai.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
     <script>
-                // Expose last query's total row impact (returned or affected) to the starfield
-                window.lastRowImpact = <?php echo (int)$rowImpact; ?>;
+                // Expose last query's total row impact (returned or affected) to the starfield.
+                // Use current request value if present; otherwise fall back to the last value saved in session.
+                window.lastRowImpact = <?php echo (int)($rowImpact ?: ($_SESSION['last_row_impact'] ?? 0)); ?>;
         (function() {
             var textarea = document.querySelector('textarea[name=sql]');
             var editorDiv = document.getElementById('editor');
@@ -793,10 +800,10 @@ if (credentials_valid() && $selectedDb !== '' && ($view === 'table')) {
             // Starfield configuration for easy tweaking
             var STARFIELD = {
                 maxStars: 500,          // global cap
-                maxAltFraction: 0.5,    // max fraction of stars going alternate direction
+                maxAltFraction: 0.8,    // max fraction of stars going alternate direction
                 baseSpeed: 0.1,         // primary star nominal speed (px per frame)
                 speedJitter: 0.04,      // +/- jitter around base speed
-                altSpeed: 0.11,         // alternate stars speed
+                altSpeed: 0.13,         // alternate stars speed
                 obliqueAngleDeg: 20,    // base oblique angle for primary drift (degrees). 0 = purely right
                 altOffsetDeg: 180,      // how much to rotate for alt direction
                 verticalJitter: 0.3,    // factor mixing in some orthogonal component
@@ -826,6 +833,7 @@ if (credentials_valid() && $selectedDb !== '' && ($view === 'table')) {
                 var altCap = Math.floor(total * STARFIELD.maxAltFraction);
                 var altCount = Math.min(altCap, lastImpact);
                 var mainCount = Math.max(0, total - altCount);
+                console.log('Starfield init: total', total, 'main', mainCount, 'alt', altCount, 'for impact', lastImpact);
 
                 // Precompute base angles in radians
                 var baseRad = STARFIELD.obliqueAngleDeg * Math.PI / 180;
