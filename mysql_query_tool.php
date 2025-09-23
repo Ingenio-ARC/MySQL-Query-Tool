@@ -481,6 +481,7 @@ if (credentials_valid() && $selectedDb !== '' && ($view === 'table')) {
             border: 1px solid var(--border);
             padding: 2px;
             font-size: 11px;
+            max-width: 300px;
         }
 
         .saved-list {
