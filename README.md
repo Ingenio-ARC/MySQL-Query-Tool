@@ -1,14 +1,14 @@
 # MySQL Query Tool (single-file PHP)
 
-A minimal single-file PHP application to run MySQL queries and save them for later reuse.
+Minimal single-file PHP app to run MySQL queries, browse tables, and save favorite queries. ⚡
 
 Files:
-- `mysql_query_tool.php` - The app. Edit DB credentials at the top of the file.
-- `saved_queries.json` - Created automatically next to the PHP file to store saved queries.
+- `mysql_query_tool.php` — The app (edit DB creds at the top if you want static creds).
+- `saved_queries.json` — Auto-created to store saved queries.
 
 Quick start (requires PHP and access to the MySQL server):
 
-1. Edit `mysql_query_tool.php` and replace the dummy DB credentials with your own.
+1. Edit `mysql_query_tool.php` and replace the dummy DB credentials with your own (or use the login form in-app).
 2. From the directory containing `mysql_query_tool.php`, run the PHP built-in server:
 
 ```bash
@@ -17,19 +17,26 @@ php -S localhost:8000
 
 3. Open `http://localhost:8000/mysql_query_tool.php` in your browser.
 
-Visual flair (dark mode):
-- A lightweight starfield runs only in dark mode.
-- Most stars drift in the same direction to mimic a night sky.
-- A subset of subtly bluish stars move the opposite way; their count reflects the latest query's total row impact (rows returned for SELECTs, affected rows for INSERT/UPDATE/DELETE), capped to avoid excess.
-- The total number of stars is limited by a global cap to protect performance.
+Features ✨
+- SQL editor with Ace autocompletion.
+- Saved queries panel with update-in-place: when you load and edit a saved query, pressing Save overwrites that entry. Use a new name to save as new.
+- Database selector updates the tables list via AJAX — no page reloads required.
+- CSV export with configurable separator (, or ;).
 
-Security notes:
+Dark Mode Starfield 🌌
+- Runs only in dark mode. Most stars drift along an oblique direction; a gentle global rotation makes it feel like a night sky.
+- A subset of bluish stars (rgb(81, 147, 255)) drift in a different direction. Their count reflects the latest “row impact”: rows returned (SELECT) or affected (INSERT/UPDATE/DELETE), with sensible caps.
+- Performance-friendly: total stars are capped and scale with viewport size.
+- Tunables (in `mysql_query_tool.php`, search for `STARFIELD`): `maxStars`, `maxAltFraction`, `baseSpeed`, `altSpeed`, `speedJitter`, `obliqueAngleDeg`, `altOffsetDeg`, `verticalJitter`, `rotationSpeed`, `enableRotation`.
+
+Security 🔒
 - This tool is intentionally small and not hardened. Do not expose it to untrusted networks.
-- Running arbitrary SQL can modify or delete data. Use caution.
+- Running arbitrary SQL can modify or delete data. Proceed with caution.
 
-Session login:
-- The app now prompts for MySQL credentials in a small login form. Those credentials are stored in the PHP session (not on disk) so you don't have to re-enter them for each query.
-- Credentials expire after 60 minutes by default. To change the expiry, edit the `$sessionExpirySeconds` variable in `mysql_query_tool.php`.
-- When you log out the session-stored credentials are cleared.
+Session & Credentials 🔑
+- Login form stores credentials in the PHP session (not on disk) for convenience.
+- Credentials expire by default after 8 hours. Adjust `$sessionExpirySeconds` in `mysql_query_tool.php`.
+- Logging out clears session-stored credentials and recent “row impact”.
 
-License: Public domain (use at your own risk).
+License ✅
+Public domain (use at your own risk).
