@@ -74,6 +74,9 @@ if (credentials_valid() && isset($_GET['load'])) {
     if ($loadId && isset($all[$loadId])) {
         $_POST['sql'] = $all[$loadId]['sql'];
         $currentSql = $all[$loadId]['sql'];
+        // Track which saved query is currently being edited
+        $_SESSION['current_edit_id'] = $loadId;
+        $_SESSION['current_edit_name'] = $all[$loadId]['name'];
         // create a messages array if not set yet
         if (!isset($messages)) $messages = [];
         $messages[] = "Loaded query '{$all[$loadId]['name']}' from sidebar.";
@@ -115,6 +118,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($action === 'run' || $action === 'save' || $action === 'export') {
         $sql = $_POST['sql'] ?? '';
         $name = trim($_POST['name'] ?? '');
+        // Ensure editor keeps the latest edited SQL after POST
+        $currentSql = $sql;
         if (!credentials_valid()) {
             $error = 'Database credentials are missing or expired. Please log in.';
         }
@@ -122,16 +127,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if ($name === '') {
                 $messages[] = "Please provide a name to save the query.";
             } else {
-                // store
-                $id = uniqid();
-                $savedQueries[$id] = [
-                    'id' => $id,
-                    'name' => $name,
-                    'sql' => $sql,
-                    'created' => date('c')
-                ];
-                save_saved_queries($savedFile, $savedQueries);
-                $messages[] = "Saved query '{$name}'.";
+                // If editing an existing saved query, override it; else create new
+                $editId = $_POST['id'] ?? ($_SESSION['current_edit_id'] ?? '');
+                if ($editId && isset($savedQueries[$editId])) {
+                    $savedQueries[$editId]['name'] = $name;
+                    $savedQueries[$editId]['sql'] = $sql;
+                    $savedQueries[$editId]['updated'] = date('c');
+                    save_saved_queries($savedFile, $savedQueries);
+                    $_SESSION['current_edit_id'] = $editId;
+                    $_SESSION['current_edit_name'] = $name;
+                    $messages[] = "Updated query '{$name}'.";
+                } else {
+                    // store new
+                    $id = uniqid();
+                    $savedQueries[$id] = [
+                        'id' => $id,
+                        'name' => $name,
+                        'sql' => $sql,
+                        'created' => date('c')
+                    ];
+                    save_saved_queries($savedFile, $savedQueries);
+                    $_SESSION['current_edit_id'] = $id;
+                    $_SESSION['current_edit_name'] = $name;
+                    $messages[] = "Saved query '{$name}'.";
+                }
             }
         }
 
@@ -248,6 +267,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $name = $savedQueries[$id]['name'];
                 unset($savedQueries[$id]);
                 save_saved_queries($savedFile, $savedQueries);
+                if (!empty($_SESSION['current_edit_id']) && $_SESSION['current_edit_id'] === $id) {
+                    unset($_SESSION['current_edit_id'], $_SESSION['current_edit_name']);
+                }
                 $messages[] = "Deleted query '{$name}'.";
             }
         }
@@ -260,6 +282,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $loadedSql = $savedQueries[$id]['sql'];
                 // set POST sql for UI
                 $_POST['sql'] = $loadedSql;
+                // track that we're editing this saved query
+                $_SESSION['current_edit_id'] = $id;
+                $_SESSION['current_edit_name'] = $savedQueries[$id]['name'];
                 $messages[] = "Loaded query '{$savedQueries[$id]['name']}'.";
             }
         }
@@ -674,8 +699,9 @@ if (credentials_valid() && $selectedDb !== '' && ($view === 'table')) {
                     <form method="post">
                         <input type="hidden" name="action" value="save">
                         <input type="hidden" name="selected_db" value="<?php echo htmlspecialchars($selectedDb); ?>">
-                        <input type="text" name="name" placeholder="Save name" required>
+                        <input type="text" name="name" placeholder="Save name" value="<?php echo htmlspecialchars($_SESSION['current_edit_name'] ?? ''); ?>" required>
                         <input type="hidden" name="sql" id="saveSql">
+                        <input type="hidden" name="id" value="<?php echo htmlspecialchars($_SESSION['current_edit_id'] ?? ''); ?>">
                         <button type="submit" onclick="document.getElementById('saveSql').value=(window.getEditorSQL?window.getEditorSQL():document.querySelector('textarea[name=sql]').value)">Save</button>
                         <button type="button" onclick="document.getElementById('saveBox').style.display='none'">Cancel</button>
                     </form>
