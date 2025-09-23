@@ -297,7 +297,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
         $sel = $_POST['selected_db'] ?? '';
         $_SESSION[$sessionKey]['database'] = $sel;
-        echo json_encode(['ok' => true, 'selected_db' => $sel]);
+        // Try fetching tables for the selected database
+        $tablesAjax = [];
+        if ($sel !== '') {
+            try {
+                $c = $_SESSION[$sessionKey];
+                $mysqliAjax = new mysqli($c['host'], $c['user'], $c['pass'], $sel);
+                if (!$mysqliAjax->connect_errno) {
+                    if ($res = $mysqliAjax->query('SHOW TABLES')) {
+                        while ($row = $res->fetch_array(MYSQLI_NUM)) {
+                            $tablesAjax[] = $row[0];
+                        }
+                        $res->free();
+                    }
+                }
+                $mysqliAjax->close();
+            } catch (Exception $e) {
+                // ignore here; client will handle no tables state
+            }
+        }
+        echo json_encode(['ok' => true, 'selected_db' => $sel, 'tables' => $tablesAjax]);
         exit;
     }
 }
@@ -540,7 +559,7 @@ if (credentials_valid() && $selectedDb !== '' && ($view === 'table')) {
 <body class="<?php echo $isDark ? 'dark' : ''; ?>">
     <canvas id="starfield"></canvas>
     <div class="container">
-        <div class="sidebar">            
+        <div class="sidebar">
             <h1>MySQL Query Tool</h1>
             <div style="margin-bottom:8px"><a href="?view=sql&selected_db=<?php echo urlencode($selectedDb); ?>" id="sql_command_link">SQL Command</a></div>
             <?php if (credentials_valid()): ?>
@@ -568,7 +587,7 @@ if (credentials_valid() && $selectedDb !== '' && ($view === 'table')) {
                 </details>
                 <details open style="margin-top:10px">
                     <summary style="cursor:pointer;font-weight:600">Tables</summary>
-                    <div class="saved-list">
+                    <div id="tables_container" class="saved-list">
                         <?php if (empty($selectedDb)): ?>
                             <div>Select a database to view tables.</div>
                         <?php elseif (empty($tables)): ?>
@@ -587,7 +606,7 @@ if (credentials_valid() && $selectedDb !== '' && ($view === 'table')) {
             <?php else: ?>
                 <details open>
                     <summary style="cursor:pointer;font-weight:600">Saved Queries</summary>
-                    <div class="saved-list">
+                    <div id="tables_container" class="saved-list">
                         <div>Please log in to view saved queries.</div>
                     </div>
                 </details>
@@ -712,9 +731,9 @@ if (credentials_valid() && $selectedDb !== '' && ($view === 'table')) {
             <!-- saved queries moved to sidebar -->
 
             <?php if ($results !== null): ?>
-                <h2>Results</h2>
                 <?php foreach ($results as $i => $set): ?>
                     <?php if ($set['type'] === 'result'): ?>
+                        <h2>Results</h2>
                         <h3><?php echo intval($set['row_count']); ?> rows in <?php echo number_format($set['time_ms'], 2); ?> ms</h3>
                         <?php if (empty($set['rows'])): ?>
                             <div>No rows returned.</div>
@@ -754,9 +773,9 @@ if (credentials_valid() && $selectedDb !== '' && ($view === 'table')) {
     <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.32.6/theme-textmate.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.32.6/theme-monokai.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
     <script>
-                // Expose last query's total row impact (returned or affected) to the starfield.
-                // Use current request value if present; otherwise fall back to the last value saved in session.
-                window.lastRowImpact = <?php echo (int)($rowImpact ?: ($_SESSION['last_row_impact'] ?? 0)); ?>;
+        // Expose last query's total row impact (returned or affected) to the starfield.
+        // Use current request value if present; otherwise fall back to the last value saved in session.
+        window.lastRowImpact = <?php echo (int)($rowImpact ?: ($_SESSION['last_row_impact'] ?? 0)); ?>;
         (function() {
             var textarea = document.querySelector('textarea[name=sql]');
             var editorDiv = document.getElementById('editor');
@@ -826,16 +845,16 @@ if (credentials_valid() && $selectedDb !== '' && ($view === 'table')) {
             var lastImpact = Math.max(0, parseInt(window.lastRowImpact || 0, 10) || 0);
             // Starfield configuration for easy tweaking
             var STARFIELD = {
-                maxStars: 500,          // global cap
-                maxAltFraction: 0.8,    // max fraction of stars going alternate direction
-                baseSpeed: 0.05,         // primary star nominal speed (px per frame)
-                speedJitter: 0.04,      // +/- jitter around base speed
-                altSpeed: 0.07,         // alternate stars speed
-                obliqueAngleDeg: 20,    // base oblique angle for primary drift (degrees). 0 = purely right
-                altOffsetDeg: 180,      // how much to rotate for alt direction
-                verticalJitter: 0.3,    // factor mixing in some orthogonal component
+                maxStars: 500, // global cap
+                maxAltFraction: 0.8, // max fraction of stars going alternate direction
+                baseSpeed: 0.05, // primary star nominal speed (px per frame)
+                speedJitter: 0.04, // +/- jitter around base speed
+                altSpeed: 0.07, // alternate stars speed
+                obliqueAngleDeg: 20, // base oblique angle for primary drift (degrees). 0 = purely right
+                altOffsetDeg: 180, // how much to rotate for alt direction
+                verticalJitter: 0.3, // factor mixing in some orthogonal component
                 // slow rotation to simulate sky; radians per second
-                rotationSpeed: 0.005,    // gentler rotation
+                rotationSpeed: 0.005, // gentler rotation
                 enableRotation: true
             };
 
@@ -865,8 +884,10 @@ if (credentials_valid() && $selectedDb !== '' && ($view === 'table')) {
                 // Precompute base angles in radians
                 var baseRad = STARFIELD.obliqueAngleDeg * Math.PI / 180;
                 var altRad = (STARFIELD.obliqueAngleDeg + STARFIELD.altOffsetDeg) * Math.PI / 180;
-                var sinBase = Math.sin(baseRad), cosBase = Math.cos(baseRad);
-                var sinAlt = Math.sin(altRad), cosAlt = Math.cos(altRad);
+                var sinBase = Math.sin(baseRad),
+                    cosBase = Math.cos(baseRad);
+                var sinAlt = Math.sin(altRad),
+                    cosAlt = Math.cos(altRad);
 
                 function makeVel(speed, sinA, cosA) {
                     // Blend the base direction with a bit of orthogonal jitter for a more natural oblique path
@@ -879,7 +900,10 @@ if (credentials_valid() && $selectedDb !== '' && ($view === 'table')) {
                     var mag = Math.hypot(vx, vy) || 1;
                     vx = vx / mag * speed;
                     vy = vy / mag * speed;
-                    return { vx: vx, vy: vy };
+                    return {
+                        vx: vx,
+                        vy: vy
+                    };
                 }
 
                 // Primary stars
@@ -922,7 +946,8 @@ if (credentials_valid() && $selectedDb !== '' && ($view === 'table')) {
                 if (STARFIELD.enableRotation && STARFIELD.rotationSpeed) {
                     var now = performance.now() / 1000; // seconds
                     var rot = now * STARFIELD.rotationSpeed;
-                    var cx = w / 2, cy = h / 2;
+                    var cx = w / 2,
+                        cy = h / 2;
                     ctx.save();
                     ctx.translate(cx, cy);
                     ctx.rotate(rot);
@@ -1035,6 +1060,31 @@ if (credentials_valid() && $selectedDb !== '' && ($view === 'table')) {
                                 url2.searchParams.set('view', 'sql');
                                 sqlLink.href = url2.toString();
                             } catch (_) {}
+                        }
+                        // rebuild Tables list if we got it from server
+                        if (j.tables && Array.isArray(j.tables)) {
+                            var container = document.getElementById('tables_container');
+                            if (container) {
+                                if (j.tables.length === 0) {
+                                    container.innerHTML = '<div>No tables found.</div>';
+                                } else {
+                                    var ul = document.createElement('ul');
+                                    ul.style.listStyle = 'none';
+                                    ul.style.padding = '0';
+                                    ul.style.margin = '6px 0 0 0';
+                                    j.tables.forEach(function(t) {
+                                        var li = document.createElement('li');
+                                        li.style.margin = '6px 0';
+                                        var a = document.createElement('a');
+                                        a.textContent = t;
+                                        a.href = '?view=table&table=' + encodeURIComponent(t) + '&page=1&selected_db=' + encodeURIComponent(v);
+                                        li.appendChild(a);
+                                        ul.appendChild(li);
+                                    });
+                                    container.innerHTML = '';
+                                    container.appendChild(ul);
+                                }
+                            }
                         }
                     } else {
                         setStatus('Failed to save DB', false);
