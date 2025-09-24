@@ -504,6 +504,10 @@ if (credentials_valid() && $selectedDb !== '' && ($view === 'table')) {
             margin-top: 10px;
         }
 
+        th {
+            font-weight: bold;
+        }
+
         td,
         th {
             border: 1px solid var(--border);
