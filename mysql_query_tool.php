@@ -433,6 +433,10 @@ if (credentials_valid() && $selectedDb !== '' && ($view === 'table')) {
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <title>MySQL Query Tool</title>
     <style>
+        /* Synthwave heading fonts */
+    @import url('https://fonts.googleapis.com/css2?family=Mr+Dafoe&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Exo:wght@400;500;700;900&display=swap');
+
         :root {
             --bg: #ffffff;
             --fg: #111111;
@@ -445,19 +449,24 @@ if (credentials_valid() && $selectedDb !== '' && ($view === 'table')) {
 
         body.dark {
             --bg: #0e1117;
-            --fg: #e6edf3;
+            --fg: #6bc9f6;
             --border: #2d333b;
             --panel-bg: #0e1117;
             --msg-bg: #13233a;
             --err-bg: #3a1b1b;
-            --link: #58a6ff;
+            --link: #ba35ce;
         }
 
         body {
-            font-family: system-ui, Segoe UI, Roboto, Arial;
+            font-family: 'Exo', system-ui, Segoe UI, Roboto, Arial, sans-serif;
             margin: 20px;
             background: var(--bg);
             color: var(--fg);
+        }
+
+        /* Make form controls and common UI elements inherit the Exo font */
+        button, input, select, textarea, label, summary, .theme-toggle, table, th, td {
+            font: inherit;
         }
 
         .container {
@@ -551,6 +560,61 @@ if (credentials_valid() && $selectedDb !== '' && ($view === 'table')) {
             border: 1px solid var(--border);
             cursor: pointer;
             box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+        }
+
+        /* ---- Synthwave headings (applied to all h1, h2) ---- */
+        h1 {
+            font-family: 'Exo', system-ui, Segoe UI, Roboto, Arial, sans-serif;
+            font-weight: 900;
+            letter-spacing: 0.03em;
+            margin: 4px 0 8px 0;
+            line-height: 1.1;
+            font-size: 22px; /* sensible default for sidebar */
+        }
+
+        .main h1 {
+            font-size: 26px; /* slightly larger in main content if used */
+        }
+
+        h2, summary {
+            font-family: 'Mr Dafoe', cursive;
+            margin: 8px 0 10px 0;
+            line-height: 1.1;
+            font-size: 22px;
+        }
+
+        /* Light mode: keep it readable, subtle effects */
+        body:not(.dark) h1 {
+            color: var(--fg);
+            text-shadow: 0 0 0.05em rgba(139, 162, 208, 0.3);
+        }
+        body:not(.dark) h2 {
+            color: var(--fg);
+            text-shadow: 0 0 0.05em rgba(254, 5, 225, 0.2);
+            transform: none;
+        }
+
+        /* Dark mode: mirror the CodePen color set */
+        body.dark h1 {
+            background-image: linear-gradient(
+                #032d50 25%,
+                #00a1ef 35%,
+                #ffffff 50%,
+                #20125f 50%,
+                #8313e7 55%,
+                #ff61af 75%
+            );
+            -webkit-background-clip: text;
+            background-clip: text;
+            -webkit-text-fill-color: transparent;
+            color: transparent;
+            -webkit-text-stroke: 0.03em #94a0b9;
+        }
+
+        body.dark h2, body.dark summary {
+            color: #ffffff;
+            text-shadow: 0 0 0.05em #ffffff, 0 0 0.2em #fe05e1, 0 0 0.3em #fe05e1;
+            transform: rotate(-2deg);
         }
     </style>
 </head>
