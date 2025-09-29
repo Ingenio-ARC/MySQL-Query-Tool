@@ -37,8 +37,12 @@ if (isset($_POST['action']) && $_POST['action'] === 'login') {
     $user = trim($_POST['user'] ?? '');
     $pass = $_POST['pass'] ?? '';
     $database = trim($_POST['database'] ?? '');
-    if ($host === '' || $user === '') {
-        $loginError = 'Please provide host and user.';
+    // If host left blank, default to localhost
+    if ($host === '') {
+        $host = '127.0.0.1';
+    }
+    if ($user === '') {
+        $loginError = 'Please provide user.';
     } else {
         $_SESSION[$sessionKey] = [
             'host' => $host,
@@ -580,6 +584,10 @@ if (credentials_valid() && $selectedDb !== '' && ($view === 'table')) {
             font-size: 26px; /* slightly larger in main content if used */
         }
 
+        .table-title {
+            display: inline-block;
+        }
+
         h2, summary {
             font-family: 'Mr Dafoe', cursive;
             margin: 8px 0 10px 0;
@@ -712,12 +720,13 @@ if (credentials_valid() && $selectedDb !== '' && ($view === 'table')) {
                     <?php if (!empty($loginError)): ?><div class="error"><?php echo htmlspecialchars($loginError); ?></div><?php endif; ?>
                     <form method="post" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
                         <input type="hidden" name="action" value="login">
-                        <input name="host" placeholder="host (127.0.0.1)" required>
+                        <input name="host" placeholder="host (default: 127.0.0.1)" value="<?php echo isset($_POST['host']) ? htmlspecialchars($_POST['host']) : ''; ?>">
                         <input name="user" placeholder="user" required>
                         <input name="pass" placeholder="password" type="password">
                         <input name="database" placeholder="default database (optional)">
                         <button type="submit">Login and Store</button>
                     </form>
+                    <div style="font-size:11px;margin-top:4px;color:#666">Leave host blank to use 127.0.0.1 (localhost).</div>
                 </div>
             <?php endif; ?>
             <?php foreach ($messages as $m): ?>
@@ -728,16 +737,36 @@ if (credentials_valid() && $selectedDb !== '' && ($view === 'table')) {
             <?php endif; ?>
 
             <?php if ($view === 'table' && $tableView): ?>
-                <h2>Table: <?php echo htmlspecialchars($tableView['name']); ?></h2>
+                <h2 class="table-title">Table: <?php echo htmlspecialchars($tableView['name']); ?></h2>
                 <?php
                 $totalPages = max(1, (int)ceil($tableView['total'] / $tableView['perPage']));
                 $currPage = $tableView['page'];
                 $base = '?view=table&table=' . urlencode($tableView['name']) . '&selected_db=' . urlencode($selectedDb) . '&page=';
                 ?>
                 <div style="margin-bottom:8px">
-                    <a href="<?php echo $base . max(1, $currPage - 1); ?>">Prev</a>
+                    <?php if ($currPage > 1): ?>
+                        <a href="<?php echo $base . '1'; ?>">First</a>
+                    <?php else: ?>
+                        <span style="color:#999">First</span>
+                    <?php endif; ?>
+                    <span style="margin:0 6px">|</span>
+                    <?php if ($currPage > 1): ?>
+                        <a href="<?php echo $base . ($currPage - 1); ?>">Prev</a>
+                    <?php else: ?>
+                        <span style="color:#999">Prev</span>
+                    <?php endif; ?>
                     <span style="margin:0 8px">Page <?php echo $currPage; ?> / <?php echo $totalPages; ?></span>
-                    <a href="<?php echo $base . min($totalPages, $currPage + 1); ?>">Next</a>
+                    <?php if ($currPage < $totalPages): ?>
+                        <a href="<?php echo $base . ($currPage + 1); ?>">Next</a>
+                    <?php else: ?>
+                        <span style="color:#999">Next</span>
+                    <?php endif; ?>
+                    <span style="margin:0 6px">|</span>
+                    <?php if ($currPage < $totalPages): ?>
+                        <a href="<?php echo $base . $totalPages; ?>">Last</a>
+                    <?php else: ?>
+                        <span style="color:#999">Last</span>
+                    <?php endif; ?>
                 </div>
                 <?php if (empty($tableView['rows'])): ?>
                     <div>No rows.</div>

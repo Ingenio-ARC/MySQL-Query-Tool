@@ -22,6 +22,7 @@ Features ✨
 - Saved queries panel with update-in-place: when you load and edit a saved query, pressing Save overwrites that entry. Use a new name to save as new.
 - Database selector updates the tables list via AJAX — no page reloads required.
 - CSV export with configurable separator (, or ;).
+ - Table view with pagination including First/Prev/Next/Last controls.
 
 Dark Mode Starfield 🌌
 - Runs only in dark mode. Most stars drift along an oblique direction; a gentle global rotation makes it feel like a night sky.
