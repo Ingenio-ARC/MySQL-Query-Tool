@@ -69,9 +69,11 @@ if (!file_exists($savedFile)) {
     file_put_contents($savedFile, json_encode([]));
 }
 
-// Only allow loading saved queries when authenticated
-// Robust: if a GET load is requested, read the saved file directly and populate the editor
-if (credentials_valid() && isset($_GET['load'])) {
+// Only allow loading saved queries when authenticated AND only on an initial GET request.
+// Previously this executed on every POST that still had ?load=ID in the query string, causing the
+// editor contents (user edits) to be overwritten with the original saved SQL just before executing.
+// Fix: restrict to GET so that subsequent POST actions (run/save/export) operate on the edited SQL.
+if ($_SERVER['REQUEST_METHOD'] === 'GET' && credentials_valid() && isset($_GET['load'])) {
     $loadId = $_GET['load'];
     $raw = @file_get_contents($savedFile);
     $all = json_decode($raw, true) ?: [];
@@ -795,14 +797,26 @@ if (credentials_valid() && $selectedDb !== '' && ($view === 'table')) {
                     <span style="margin-left:8px"><a href="?view=sql&selected_db=<?php echo urlencode($selectedDb); ?>">Back to SQL Command</a></span>
                 </div>
             <?php else: ?>
-                <form method="post">
+                <?php
+                    // Build a form action URL that intentionally omits any lingering load=… parameter
+                    // so that after loading a saved query, pressing Run SQL won't re-trigger the load logic.
+                    $formActionParams = [];
+                    if (!empty($selectedDb)) $formActionParams['selected_db'] = $selectedDb;
+                    $formActionParams['view'] = 'sql';
+                    $runFormAction = $_SERVER['PHP_SELF'];
+                    if (!empty($formActionParams)) {
+                        $runFormAction .= '?' . http_build_query($formActionParams);
+                    }
+                ?>
+                <form method="post" action="<?php echo htmlspecialchars($runFormAction); ?>">
                     <input type="hidden" name="action" value="run">
                     <input type="hidden" name="selected_db" value="<?php echo htmlspecialchars($selectedDb); ?>">
                     <div id="editor" style="width:100%;height:220px;border:1px solid #ddd"></div>
                     <textarea name="sql" style="display:none"><?php echo htmlspecialchars($currentSql); ?></textarea>
-                    <div style="margin-top:8px">
+                    <div style="margin-top:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
                         <button type="submit" name="action" value="run">Run SQL</button>
                         <button type="button" onclick="document.getElementById('saveBox').style.display='block'">Save Query</button>
+                        <span id="modified_indicator" style="display:none;color:#d15;font-weight:600;font-size:12px">(modified)</span>
                         <label for="sep" style="margin-left:8px">CSV sep:</label>
                         <select id="sep" name="sep">
                             <option value=",">Comma (,)</option>
@@ -813,7 +827,11 @@ if (credentials_valid() && $selectedDb !== '' && ($view === 'table')) {
                 </form>
 
                 <div id="saveBox" style="display:none;margin-top:8px">
-                    <form method="post">
+                    <?php
+                        // Reuse same sanitized action (no load param) for save form
+                        $saveFormAction = $runFormAction;
+                    ?>
+                    <form method="post" action="<?php echo htmlspecialchars($saveFormAction); ?>">
                         <input type="hidden" name="action" value="save">
                         <input type="hidden" name="selected_db" value="<?php echo htmlspecialchars($selectedDb); ?>">
                         <input type="text" name="name" placeholder="Save name" value="<?php echo htmlspecialchars($_SESSION['current_edit_name'] ?? ''); ?>" required>
@@ -890,6 +908,25 @@ if (credentials_valid() && $selectedDb !== '' && ($view === 'table')) {
                 useSoftTabs: true
             });
             editor.session.setValue(textarea.value || '');
+            // Track original saved SQL (only if a saved query is currently being edited)
+            var originalSavedSql = (function(){
+                var sid = <?php echo json_encode($_SESSION['current_edit_id'] ?? ''); ?>;
+                if (!sid) return textarea.value || '';
+                // Use the textarea initial value as the canonical original
+                return textarea.value || '';
+            })();
+            function normalizeSql(s){ return (s||'').replace(/\r\n?|\n/g,'\n').trim(); }
+            var modifiedIndicator = document.getElementById('modified_indicator');
+            function updateModified(){
+                if(!modifiedIndicator) return;
+                var isMod = normalizeSql(editor.getValue()) !== normalizeSql(originalSavedSql);
+                modifiedIndicator.style.display = isMod ? 'inline' : 'none';
+            }
+            editor.session.on('change', function(){
+                updateModified();
+            });
+            // Initial check
+            updateModified();
             // Keep textarea synced on form submit
             var runForm = textarea.closest('form');
             if (runForm) {
