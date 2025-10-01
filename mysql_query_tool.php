@@ -114,6 +114,10 @@ $tables = [];
 $tableView = null; // holds data when viewing a table
 $view = $_GET['view'] ?? '';
 $view = in_array($view, ['table', 'sql']) ? $view : 'sql';
+$showSchema = (isset($_GET['schema']) && $_GET['schema'] === '1'); // toggle for schema display in table view
+// schema data containers
+$tableSchemaDescribe = [];
+$tableSchemaCreate = '';
 
 // (GET load now handled more robustly earlier)
 
@@ -409,6 +413,24 @@ if (credentials_valid() && $selectedDb !== '' && ($view === 'table')) {
                 foreach ($fields as $f) $cols[] = $f->name;
                 while ($r = $res->fetch_assoc()) $rows[] = $r;
                 $res->free();
+            }
+            // If schema requested, fetch DESCRIBE and SHOW CREATE TABLE
+            if ($showSchema) {
+                if ($resDesc = $mysqli->query('DESCRIBE `' . $mysqli->real_escape_string($tableName) . '`')) {
+                    while ($r = $resDesc->fetch_assoc()) {
+                        $tableSchemaDescribe[] = $r; // keys: Field, Type, Null, Key, Default, Extra
+                    }
+                    $resDesc->free();
+                }
+                if ($resCreate = $mysqli->query('SHOW CREATE TABLE `' . $mysqli->real_escape_string($tableName) . '`')) {
+                    if ($createRow = $resCreate->fetch_assoc()) {
+                        // SHOW CREATE TABLE returns either 'Create Table' key (case varies by driver version)
+                        foreach ($createRow as $k => $v) {
+                            if (stripos($k, 'create') !== false) { $tableSchemaCreate = (string)$v; break; }
+                        }
+                    }
+                    $resCreate->free();
+                }
             }
             $mysqli->close();
             $tableView = [
@@ -769,7 +791,46 @@ if (credentials_valid() && $selectedDb !== '' && ($view === 'table')) {
                     <?php else: ?>
                         <span style="color:#999">Last</span>
                     <?php endif; ?>
+                    <span style="margin:0 12px">|</span>
+                    <?php if (!$showSchema): ?>
+                        <a href="<?php echo $base . $currPage . '&schema=1'; ?>">Show Schema</a>
+                    <?php else: ?>
+                        <a href="<?php echo $base . $currPage; ?>">Hide Schema</a>
+                    <?php endif; ?>
                 </div>
+                <?php if ($showSchema): ?>
+                    <div style="margin:10px 0;padding:8px;border:1px solid var(--border);background:var(--panel-bg)">
+                        <h3 style="margin-top:0">Schema (DESCRIBE)</h3>
+                        <?php if (empty($tableSchemaDescribe)): ?>
+                            <div style="font-size:12px;color:#666">Could not retrieve schema or no columns.</div>
+                        <?php else: ?>
+                            <table style="margin-top:4px">
+                                <thead>
+                                    <tr>
+                                        <?php foreach (array_keys($tableSchemaDescribe[0]) as $col): ?>
+                                            <th><?php echo htmlspecialchars($col); ?></th>
+                                        <?php endforeach; ?>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <?php foreach ($tableSchemaDescribe as $r): ?>
+                                        <tr>
+                                            <?php foreach ($r as $v): ?>
+                                                <td><?php echo htmlspecialchars((string)$v); ?></td>
+                                            <?php endforeach; ?>
+                                        </tr>
+                                    <?php endforeach; ?>
+                                </tbody>
+                            </table>
+                        <?php endif; ?>
+                        <?php if (!empty($tableSchemaCreate)): ?>
+                            <details open style="margin-top:10px">
+                                <summary style="cursor:pointer;font-weight:600">SHOW CREATE TABLE</summary>
+                                <pre style="white-space:pre-wrap;font-size:11px;overflow:auto;margin:6px 0 0 0;"><?php echo htmlspecialchars($tableSchemaCreate); ?></pre>
+                            </details>
+                        <?php endif; ?>
+                    </div>
+                <?php endif; ?>
                 <?php if (empty($tableView['rows'])): ?>
                     <div>No rows.</div>
                 <?php else: ?>
